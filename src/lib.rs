@@ -215,10 +215,10 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
     let address = unsafe { CStr::from_ptr(osc_template.address) }.to_str().unwrap();
     let mut ix = 0;
     write_address(buf, &mut ix, address);
+    buf[ix] = 44; // ,
+    ix += 1;
     match osc_template.osc_type {
         OscType::Int => {
-            buf[ix] = 44; // ,
-            ix += 1;
             buf[ix] = 105; // i
             ix += 3;
             let bytes = osc_template.value.int.to_be_bytes();
@@ -226,8 +226,6 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
             ix += 4;
         }
         OscType::Float => {
-            buf[ix] = 44; // ,
-            ix += 1;
             buf[ix] = 102; // f
             ix += 3;
             let bytes = osc_template.value.float.to_be_bytes();
@@ -235,10 +233,8 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
             ix += 4;
         }
         OscType::Bool => {
-            buf[ix] = 44; // ,
-            ix += 1;
             buf[ix] = if osc_template.value.bool { 84 } else { 70 }; // T or F
-            ix += 1;
+            ix += 3;
         }
         OscType::String => {
             println!("Not implemented yet!")
