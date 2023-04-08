@@ -19,6 +19,14 @@ pub struct OscValue {
     float: f32,
     bool: bool,
     string: *const c_char,
+    vector2: [f32; 2],
+    vector3: [f32; 3]
+}
+
+impl Default for OscValue {
+    fn default() -> OscValue {
+        OscValue { int: 0, float: 0.0, bool: false, string: std::ptr::null(), vector3: [0.0, 0.0, 0.0], vector2: [0.0, 0.0] }
+    }
 }
 
 #[derive(Debug)]
@@ -28,6 +36,8 @@ pub enum OscType {
     Float,
     Bool,
     String,
+    Vector2,
+    Vector3
 }
 
 #[repr(C)]
@@ -70,34 +80,43 @@ fn extract_osc_value(buf: &[u8], ix: &mut usize) -> Result<(OscType, OscValue), 
 
     *ix += 1;
 
-    let type_char = buf[*ix] as char;
-    *ix += 3;
+    // Read until we hit a null terminator
+    let types: Vec<char> = buf[*ix..].iter().take_while(|&&c| c != 0).map(|&c| c as char).collect();
+    *ix += types.len();
 
-    let mut value = OscValue { int: 0, float: 0.0, bool: false, string: std::ptr::null() };
+    // Pad with one null
+    *ix += 1;
+
+    // Round up to 4 bytes
+    if *ix % 4 != 0 {
+        *ix += 4 - (*ix % 4);
+    }
+
+    let mut value = OscValue {..Default::default()};
 
     // Now we convert this to an OscValue based on the type
-    return match type_char {
-        'i' => {
+    return match types[..] {
+        ['i'] => {
             let mut bytes = [0; 4];
             bytes.copy_from_slice(&buf[*ix..*ix + 4]);
             value.int = i32::from_be_bytes(bytes);
             Ok((OscType::Int, value))
         }
-        'f' => {
+        ['f'] => {
             let mut bytes = [0; 4];
             bytes.copy_from_slice(&buf[*ix..*ix + 4]);
             value.float = f32::from_be_bytes(bytes);
             Ok((OscType::Float, value))
         }
-        'T' => {
+        ['T'] => {
             value.bool = true;
             Ok((OscType::Bool, value))
         }
-        'F' => {
+        ['F'] => {
             value.bool = false;
             Ok((OscType::Bool, value))
         }
-        's' => {
+        ['s'] => {
             let mut string = String::new();
             while buf[*ix] != 0 {
                 string.push(buf[*ix] as char);
@@ -106,6 +125,29 @@ fn extract_osc_value(buf: &[u8], ix: &mut usize) -> Result<(OscType, OscValue), 
             *ix += 1;
             value.string = CString::new(string).unwrap().into_raw();
             Ok((OscType::String, value))
+        }
+        ['f', 'f', 'f'] => {
+            let mut bytes = [0; 4];
+            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
+            value.vector3[0] = f32::from_be_bytes(bytes);
+            *ix += 4;
+            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
+            value.vector3[1] = f32::from_be_bytes(bytes);
+            *ix += 4;
+            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
+            value.vector3[2] = f32::from_be_bytes(bytes);
+            *ix += 4;
+            Ok((OscType::Vector3, value))
+        }
+        ['f', 'f'] => {
+            let mut bytes = [0; 4];
+            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
+            value.vector2[0] = f32::from_be_bytes(bytes);
+            *ix += 4;
+            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
+            value.vector2[1] = f32::from_be_bytes(bytes);
+            *ix += 4;
+            Ok((OscType::Vector3, value))
         }
         _ => {
             Err(ParserError::InvalidType)
@@ -239,6 +281,32 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
         OscType::String => {
             println!("Not implemented yet!")
         }
+        OscType::Vector3 => {
+            buf[ix] = 102; // f
+            buf[ix + 1] = 102;
+            buf[ix + 2] = 102;
+            ix += 7;
+            let bytes = osc_template.value.vector3[0].to_be_bytes();
+            buf[ix..ix + 4].copy_from_slice(&bytes);
+            ix += 4;
+            let bytes = osc_template.value.vector3[1].to_be_bytes();
+            buf[ix..ix + 4].copy_from_slice(&bytes);
+            ix += 4;
+            let bytes = osc_template.value.vector3[2].to_be_bytes();
+            buf[ix..ix + 4].copy_from_slice(&bytes);
+            ix += 4;
+        }
+        OscType::Vector2 => {
+            buf[ix] = 102; // f
+            buf[ix + 1] = 102;
+            ix += 2;
+            let bytes = osc_template.value.vector2[0].to_be_bytes();
+            buf[ix..ix + 4].copy_from_slice(&bytes);
+            ix += 4;
+            let bytes = osc_template.value.vector2[1].to_be_bytes();
+            buf[ix..ix + 4].copy_from_slice(&bytes);
+            ix += 4;
+        }
     }
 
     ix
@@ -303,127 +371,198 @@ pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessa
 mod tests {
     use super::*;
 
-    #[test]
-    fn serialize_osc_message() {
-        let mut buf: [u8; 4096] = [0; 4096];
-        let osc_message = OscMessage {
-            address: CString::new("/test_message/meme").unwrap().into_raw(),
-            osc_type: OscType::Int,
-            value: OscValue { int: 42, float: 0.0, bool: false, string: std::ptr::null_mut() },
-        };
+    #[cfg(test)]
+    mod serialize {
+        use super::*;
 
-        create_osc_message(buf.as_mut_ptr(), &osc_message);
-        match parse(&buf) {
-            Ok(message) => {
-                // Convert the address string ptr to a literal string and compare
-                let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
-                assert_eq!(address, "/test_message/meme", "Address was resolved incorrectly.");
-                assert_eq!(message.value.int, 42, "Value was resolved incorrectly.");
+        #[test]
+        fn serialize_osc_message() {
+            let mut buf: [u8; 4096] = [0; 4096];
+            let osc_message = OscMessage {
+                address: CString::new("/test_message/meme").unwrap().into_raw(),
+                osc_type: OscType::Int,
+                value: OscValue { int: 42, ..Default::default() },
+            };
+
+            create_osc_message(buf.as_mut_ptr(), &osc_message);
+            match parse(&buf) {
+                Ok(message) => {
+                    // Convert the address string ptr to a literal string and compare
+                    let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(address, "/test_message/meme", "Address was resolved incorrectly.");
+                    assert_eq!(message.value.int, 42, "Value was resolved incorrectly.");
+                }
+                Err(_) => assert!(false, "Failed to parse message."),
             }
-            Err(_) => assert!(false, "Failed to parse message."),
+        }
+
+        #[test]
+        fn serialize_osc_bundle() {
+            // Create an array consisting of three messages
+            let osc_message1 = OscMessage {
+                address: CString::new("/test_message/meme").unwrap().into_raw(),
+                osc_type: OscType::Int,
+                value: OscValue { int: 42, ..Default::default() },
+            };
+            let osc_message2 = OscMessage {
+                address: CString::new("/test_message/meme2").unwrap().into_raw(),
+                osc_type: OscType::Float,
+                value: OscValue { float: 3.14, ..Default::default() },
+            };
+            let osc_message3 = OscMessage {
+                address: CString::new("/test_message/meme3").unwrap().into_raw(),
+                osc_type: OscType::Vector3,
+                value: OscValue { vector3: [1.0, 2.0, 3.0], ..Default::default() },
+            };
+            let osc_message4 = OscMessage {
+                address: CString::new("/test_message/meme3").unwrap().into_raw(),
+                osc_type: OscType::Bool,
+                value: OscValue { bool: true, ..Default::default() },
+            };
+            let messages = [osc_message1, osc_message2, osc_message3, osc_message4];
+
+            let mut buf: [u8; 4096] = [0; 4096];
+            let mut index: usize = 0;
+            let len1 = create_osc_bundle(buf.as_mut_ptr(), messages.as_ptr(), messages.len(), &mut index);
+
+            index = 1;
+            let len2 = create_osc_bundle(buf.as_mut_ptr(), messages.as_ptr(), messages.len(), &mut index);
+
+            assert!(len2 < len1, "Length of bundle was not calculated correctly. Second bundle should be smaller than the first.");
         }
     }
 
-    #[test]
-    fn serialize_osc_bundle() {
-        // Create an array consisting of three messages
-        let osc_message1 = OscMessage {
-            address: CString::new("/test_message/meme").unwrap().into_raw(),
-            osc_type: OscType::Int,
-            value: OscValue { int: 42, float: 0.0, bool: false, string: std::ptr::null_mut() },
-        };
-        let osc_message2 = OscMessage {
-            address: CString::new("/test_message/meme2").unwrap().into_raw(),
-            osc_type: OscType::Float,
-            value: OscValue { int: 0, float: 3.14, bool: false, string: std::ptr::null_mut() },
-        };
-        let osc_message3 = OscMessage {
-            address: CString::new("/test_message/meme3").unwrap().into_raw(),
-            osc_type: OscType::Bool,
-            value: OscValue { int: 0, float: 0.0, bool: true, string: std::ptr::null_mut() },
-        };
-        let messages = [osc_message1, osc_message2, osc_message3];
+    #[cfg(test)]
+    mod parse {
+        use super::*;
 
-        let mut buf: [u8; 4096] = [0; 4096];
-        let mut index: usize = 0;
-        let len1 = create_osc_bundle(buf.as_mut_ptr(), messages.as_ptr(), messages.len(), &mut index);
-
-        index = 1;
-        let len2 = create_osc_bundle(buf.as_mut_ptr(), messages.as_ptr(), messages.len(), &mut index);
-
-        assert!(len2 < len1, "Length of bundle was not calculated correctly. Second bundle should be smaller than the first.");
-    }
-
-    #[test]
-    fn parse_bool() {
-        let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 84, 0, 0];
-        match parse(&buf) {
-            Ok(message) => {
-                // Convert the address string ptr to a literal string and compare
-                let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
-                assert_eq!(address, "/test", "Address was resolved incorrectly.");
-                assert_eq!(message.value.bool, true, "Value was resolved incorrectly.");
-            }
-            Err(e) => {
-                panic!("Error: {:?}", e);
+        #[test]
+        fn parse_bool() {
+            let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 84, 0, 0];
+            match parse(&buf) {
+                Ok(message) => {
+                    // Convert the address string ptr to a literal string and compare
+                    let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(address, "/test", "Address was resolved incorrectly.");
+                    assert_eq!(message.value.bool, true, "Value was resolved incorrectly.");
+                }
+                Err(e) => {
+                    panic!("Error: {:?}", e);
+                }
             }
         }
-    }
 
-    #[test]
-    fn parse_int() {
-        let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 105, 0, 0, 0, 0, 0, 9];
-        match parse(&buf) {
-            Ok(message) => {
-                // Convert the address string ptr to a literal string and compare
-                let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
-                assert_eq!(address, "/test", "Address was resolved incorrectly.");
-                assert_eq!(message.value.int, 9, "Value was resolved incorrectly.");
-            }
-            Err(e) => {
-                panic!("Error: {:?}", e);
-            }
-        }
-    }
-
-    #[test]
-    fn parse_float() {
-        // Get 69.42 as a big endian array of bytes
-        let bytes = 69.42_f32.to_be_bytes();
-        let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 102, 0, 0];
-
-        // Concatenate the two arrays
-        let mut recv_bytes = [0; 16];
-        recv_bytes[..12].copy_from_slice(&buf);
-        recv_bytes[12..].copy_from_slice(&bytes);
-
-        match parse(&recv_bytes) {
-            Ok(message) => {
-                // Convert the address string ptr to a literal string and compare
-                let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
-                assert_eq!(address, "/test", "Address was resolved incorrectly.");
-                assert_eq!(message.value.float, 69.42, "Value was resolved incorrectly.");
-            }
-            Err(e) => {
-                panic!("Error: {:?}", e);
+        #[test]
+        fn parse_int() {
+            let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 105, 0, 0, 0, 0, 0, 9];
+            match parse(&buf) {
+                Ok(message) => {
+                    // Convert the address string ptr to a literal string and compare
+                    let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(address, "/test", "Address was resolved incorrectly.");
+                    assert_eq!(message.value.int, 9, "Value was resolved incorrectly.");
+                }
+                Err(e) => {
+                    panic!("Error: {:?}", e);
+                }
             }
         }
-    }
 
-    #[test]
-    fn parse_string() {
-        let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 115, 0, 0, 104, 101, 108, 108, 111, 0, 0, 0];
-        match parse(&buf) {
-            Ok(message) => {
-                // Convert the address string ptr to a literal string and compare
-                let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
-                assert_eq!(address, "/test", "Address was resolved incorrectly.");
-                // Convert the string ptr to a literal string and compare
-                let string = unsafe { CStr::from_ptr(message.value.string) }.to_str().unwrap();
-                assert_eq!(string, "hello", "Value was resolved incorrectly.");
+        #[test]
+        fn parse_float() {
+            // Get 69.42 as a big endian array of bytes
+            let bytes = 69.42_f32.to_be_bytes();
+            let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 102, 0, 0];
+
+            // Concatenate the two arrays
+            let mut recv_bytes = [0; 16];
+            recv_bytes[..12].copy_from_slice(&buf);
+            recv_bytes[12..].copy_from_slice(&bytes);
+
+            match parse(&recv_bytes) {
+                Ok(message) => {
+                    // Convert the address string ptr to a literal string and compare
+                    let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(address, "/test", "Address was resolved incorrectly.");
+                    assert_eq!(message.value.float, 69.42, "Value was resolved incorrectly.");
+                }
+                Err(e) => {
+                    panic!("Error: {:?}", e);
+                }
             }
-            Err(e) => {
-                panic!("Error: {:?}", e);
+        }
+
+        #[test]
+        fn parse_string() {
+            let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 115, 0, 0, 104, 101, 108, 108, 111, 0, 0, 0];
+            match parse(&buf) {
+                Ok(message) => {
+                    // Convert the address string ptr to a literal string and compare
+                    let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(address, "/test", "Address was resolved incorrectly.");
+                    // Convert the string ptr to a literal string and compare
+                    let string = unsafe { CStr::from_ptr(message.value.string) }.to_str().unwrap();
+                    assert_eq!(string, "hello", "Value was resolved incorrectly.");
+                }
+                Err(e) => {
+                    panic!("Error: {:?}", e);
+                }
+            }
+        }
+
+        #[test]
+        fn parse_vector2() {
+            // Get [1.0, 2.0] as a big endian array of bytes. Should be 8 bytes long.
+            let bytes = [1.0_f32, 2.0_f32].iter().fold([0; 8], |mut acc, &x| {
+                acc[..4].copy_from_slice(&x.to_be_bytes());
+                acc.rotate_left(4);
+                acc
+            });
+            let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 102, 102, 0];
+
+            // Concatenate the two arrays
+            let mut recv_bytes = [0; 20];
+            recv_bytes[..12].copy_from_slice(&buf);
+            recv_bytes[12..].copy_from_slice(&bytes);
+
+            match parse(&recv_bytes) {
+                Ok(message) => {
+                    // Convert the address string ptr to a literal string and compare
+                    let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(address, "/test", "Address was resolved incorrectly.");
+                    assert_eq!(message.value.vector2, [1.0, 2.0], "Value was resolved incorrectly.");
+                }
+                Err(e) => {
+                    panic!("Error: {:?}", e);
+                }
+            }
+        }
+
+        #[test]
+        fn parse_vector3() {
+            // Get [1.0, 2.0, 3.0] as a big endian array of bytes. Should be 12 bytes long.
+            let bytes = [1.0_f32, 2.0_f32, 3.0_f32].iter().fold([0; 12], |mut acc, &x| {
+                acc[..4].copy_from_slice(&x.to_be_bytes());
+                acc.rotate_left(4);
+                acc
+            });
+            let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 102, 102, 102, 0, 0, 0, 0];
+
+            // Concatenate the two arrays
+            let mut recv_bytes = [0; 28];
+            recv_bytes[..16].copy_from_slice(&buf);
+            recv_bytes[16..].copy_from_slice(&bytes);
+
+            match parse(&recv_bytes) {
+                Ok(message) => {
+                    // Convert the address string ptr to a literal string and compare
+                    let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(address, "/test", "Address was resolved incorrectly.");
+                    assert_eq!(message.value.vector3, [1.0, 2.0, 3.0], "Value was resolved incorrectly.");
+                }
+                Err(e) => {
+                    panic!("Error: {:?}", e);
+                }
             }
         }
     }
