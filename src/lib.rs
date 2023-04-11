@@ -273,7 +273,7 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
         OscType::Vector2 => {
             buf[ix] = 102; // f
             buf[ix + 1] = 102;
-            ix += 2;
+            ix += 3;
             let bytes = osc_template.value.float[0].to_be_bytes();
             buf[ix..ix + 4].copy_from_slice(&bytes);
             ix += 4;
