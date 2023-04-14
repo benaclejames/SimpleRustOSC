@@ -236,6 +236,7 @@ fn write_address(buf: &mut [u8], ix: &mut usize, address: &str) {
     buf[*ix] = 0;
     *ix += 1;
     if *ix % 4 != 0 {
+        buf[*ix..*ix + 4 - (*ix % 4)].copy_from_slice(&[0, 0, 0][..4 - (*ix % 4)]);
         *ix += 4 - (*ix % 4);
     }
 }
@@ -251,6 +252,7 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
     match osc_template.osc_type {
         OscType::Int => {
             buf[ix] = 105; // i
+            buf[ix+1..ix + 3].copy_from_slice(&[0, 0]);
             ix += 3;
             let bytes = osc_template.value.int.to_be_bytes();
             buf[ix..ix + 4].copy_from_slice(&bytes);
@@ -258,6 +260,7 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
         }
         OscType::Float => {
             buf[ix] = 102; // f
+            buf[ix+1..ix + 3].copy_from_slice(&[0, 0]);
             ix += 3;
             let bytes = osc_template.value.float[0].to_be_bytes();
             buf[ix..ix + 4].copy_from_slice(&bytes);
@@ -265,6 +268,7 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
         }
         OscType::Bool => {
             buf[ix] = if osc_template.value.bool { 84 } else { 70 }; // T or F
+            buf[ix..ix + 3].copy_from_slice(&[0, 0, 0]);
             ix += 3;
         }
         OscType::String => {
@@ -273,6 +277,7 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
         OscType::Vector2 => {
             buf[ix] = 102; // f
             buf[ix + 1] = 102;
+            buf[ix + 2] = 0;
             ix += 3;
             let bytes = osc_template.value.float[0].to_be_bytes();
             buf[ix..ix + 4].copy_from_slice(&bytes);
@@ -285,6 +290,7 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
             buf[ix] = 102; // f
             buf[ix + 1] = 102;
             buf[ix + 2] = 102;
+            buf[ix + 3..ix + 7].copy_from_slice(&[0, 0, 0, 0]);
             ix += 7;
             let bytes = osc_template.value.float[0].to_be_bytes();
             buf[ix..ix + 4].copy_from_slice(&bytes);
@@ -301,6 +307,7 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
             buf[ix + 1] = 102;
             buf[ix + 2] = 102;
             buf[ix + 3] = 102;
+            buf[ix + 4..ix + 7].copy_from_slice(&[0, 0, 0]);
             ix += 7;
             let bytes = osc_template.value.float[0].to_be_bytes();
             buf[ix..ix + 4].copy_from_slice(&bytes);
@@ -322,6 +329,7 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
             buf[ix + 3] = 102;
             buf[ix + 4] = 102;
             buf[ix + 5] = 102;
+            buf[ix + 6..ix + 7].copy_from_slice(&[0]);
             ix += 7;
             let bytes = osc_template.value.float[0].to_be_bytes();
             buf[ix..ix + 4].copy_from_slice(&bytes);
@@ -419,7 +427,7 @@ mod tests {
                 value: OscValue { int: 42, ..Default::default() },
             };
 
-            create_osc_message(buf.as_mut_ptr(), &osc_message);
+            let id = create_osc_message(buf.as_mut_ptr(), &osc_message);
             match parse(&buf) {
                 Ok(message) => {
                     // Convert the address string ptr to a literal string and compare
