@@ -268,7 +268,7 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
         }
         OscType::Bool => {
             buf[ix] = if osc_template.value.bool { 84 } else { 70 }; // T or F
-            buf[ix..ix + 3].copy_from_slice(&[0, 0, 0]);
+            buf[ix + 1 ..ix + 3].copy_from_slice(&[0, 0]);
             ix += 3;
         }
         OscType::String => {
@@ -423,8 +423,8 @@ mod tests {
             let mut buf: [u8; 4096] = [0; 4096];
             let osc_message = OscMessage {
                 address: CString::new("/test_message/meme").unwrap().into_raw(),
-                osc_type: OscType::Int,
-                value: OscValue { int: 42, ..Default::default() },
+                osc_type: OscType::Bool,
+                value: OscValue { bool: true, ..Default::default() },
             };
 
             let id = create_osc_message(buf.as_mut_ptr(), &osc_message);
@@ -433,7 +433,7 @@ mod tests {
                     // Convert the address string ptr to a literal string and compare
                     let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
                     assert_eq!(address, "/test_message/meme", "Address was resolved incorrectly.");
-                    assert_eq!(message.value.int, 42, "Value was resolved incorrectly.");
+                    assert_eq!(message.value.bool, true, "Value was resolved incorrectly.");
                 }
                 Err(_) => assert!(false, "Failed to parse message."),
             }
