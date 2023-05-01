@@ -8,6 +8,7 @@ pub enum ParserError {
     InvalidAddress,
     InvalidType,
     InvalidValue,
+    InvalidFormat,
 }
 
 #[derive(Debug)]
@@ -53,7 +54,7 @@ fn extract_osc_address(buf: &[u8], ix: &mut usize) -> Result<String, ParserError
 
     let mut address = String::new();
 
-    while buf[*ix] != 0 {
+    while *ix >= buf.len() && buf[*ix] != 0 {
         address.push(buf[*ix] as char);
         *ix += 1;
     }
@@ -192,9 +193,19 @@ fn extract_osc_value(buf: &[u8], ix: &mut usize) -> Result<(OscType, OscValue), 
 }
 
 fn parse(buf: &[u8]) -> Result<OscMessage, ParserError> {
+    // Ensure our buffer is at least 4 bytes long
+    if buf.len() < 4 {
+        return Err(ParserError::InvalidFormat);
+    }
+
     let mut index = 0;
     let address = extract_osc_address(&buf, &mut index);
     println!("Address: {:?}", address);
+
+    // Ensure we still have data
+    if index >= buf.len() {
+        return Err(ParserError::InvalidFormat);
+    }
 
     let value = extract_osc_value(&buf, &mut index);
     println!("Value: {:?}", value);
