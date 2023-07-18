@@ -11,39 +11,37 @@ pub enum ParserError {
     InvalidFormat,
 }
 
-#[derive(Debug)]
-#[repr(C)]
-pub struct OscValue {
-    int: i32,
-    float: [f32; 6],
-    bool: bool,
-    string: *const c_char,
-}
-
 impl Default for OscValue {
     fn default() -> OscValue {
-        OscValue { int: 0, float: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], bool: false, string: std::ptr::null() }
+        OscValue { osc_type: OscType::Null, int: 0, float: 0.0, bool: false, string: std::ptr::null() }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 #[repr(C)]
 pub enum OscType {
+    Null,
     Int,
     Float,
     Bool,
     String,
-    Vector2,
-    Vector3,
-    Vector4,
-    Vector6,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct OscValue {
+    osc_type: OscType,
+    int: i32,
+    float: f32,
+    bool: bool,
+    string: *const c_char,
 }
 
 #[repr(C)]
 pub struct OscMessage {
     pub address: *const c_char,
-    pub osc_type: OscType,
-    pub value: OscValue,
+    pub value_length: usize,
+    pub value: Box<[OscValue]>
 }
 
 fn extract_osc_address(buf: &[u8], ix: &mut usize) -> Result<String, ParserError> {
@@ -70,7 +68,7 @@ fn extract_osc_address(buf: &[u8], ix: &mut usize) -> Result<String, ParserError
     return Ok(address);
 }
 
-fn extract_osc_value(buf: &[u8], ix: &mut usize) -> Result<(OscType, OscValue), ParserError> {
+fn extract_osc_values(buf: &[u8], ix: &mut usize) -> Result<Vec<OscValue>, ParserError> {
     // First, we wanna ensure the first char is a ','
     if buf[*ix] != 44 {
         return Err(ParserError::InvalidType);
@@ -90,106 +88,54 @@ fn extract_osc_value(buf: &[u8], ix: &mut usize) -> Result<(OscType, OscValue), 
         *ix += 4 - (*ix % 4);
     }
 
-    let mut value = OscValue {..Default::default()};
+    // for each type
+    let mut values = Vec::new();
+    for t in types {
+        let mut value = OscValue { ..Default::default() };
 
-    // Now we convert this to an OscValue based on the type
-    return match types[..] {
-        ['i'] => {
-            let mut bytes = [0; 4];
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.int = i32::from_be_bytes(bytes);
-            Ok((OscType::Int, value))
-        }
-        ['f'] => {
-            let mut bytes = [0; 4];
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[0] = f32::from_be_bytes(bytes);
-            Ok((OscType::Float, value))
-        }
-        ['T'] => {
-            value.bool = true;
-            Ok((OscType::Bool, value))
-        }
-        ['F'] => {
-            value.bool = false;
-            Ok((OscType::Bool, value))
-        }
-        ['s'] => {
-            let mut string = String::new();
-            while buf[*ix] != 0 {
-                string.push(buf[*ix] as char);
-                *ix += 1;
+        // Now we convert this to an OscValue based on the type
+        match t {
+            'i' => {
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&buf[*ix..*ix + 4]);
+                value.int = i32::from_be_bytes(bytes);
+                value.osc_type = OscType::Int;
+                *ix += 4;
             }
-            *ix += 1;
-            value.string = CString::new(string).unwrap().into_raw();
-            Ok((OscType::String, value))
+            'f' => {
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&buf[*ix..*ix + 4]);
+                value.float = f32::from_be_bytes(bytes);
+                value.osc_type = OscType::Float;
+                *ix += 4;
+            }
+            'T' => {
+                value.bool = true;
+                value.osc_type = OscType::Bool;
+            }
+            'F' => {
+                value.bool = false;
+                value.osc_type = OscType::Bool;
+            }
+            's' => {
+                let mut string = String::new();
+                while buf[*ix] != 0 {
+                    string.push(buf[*ix] as char);
+                    *ix += 1;
+                }
+                *ix += 1;
+                value.string = CString::new(string).unwrap().into_raw();
+                value.osc_type = OscType::String;
+            }
+            _ => {
+                continue;
+            }
         }
-        //TODO: Should probably write some logic to properly parse any amount of these once I figure out how to FFI a vec properly
-        ['f', 'f'] => {
-            let mut bytes = [0; 4];
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[0] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[1] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            Ok((OscType::Vector2, value))
-        }
-        ['f', 'f', 'f'] => {
-            let mut bytes = [0; 4];
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[0] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[1] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[2] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            Ok((OscType::Vector3, value))
-        }
-        ['f', 'f', 'f', 'f'] => {
-            let mut bytes = [0; 4];
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[0] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[1] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[2] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[3] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            Ok((OscType::Vector4, value))
-        }
-        ['f', 'f', 'f', 'f', 'f', 'f'] => {
-            let mut bytes = [0; 4];
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[0] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[1] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[2] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[3] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[4] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            bytes.copy_from_slice(&buf[*ix..*ix + 4]);
-            value.float[5] = f32::from_be_bytes(bytes);
-            *ix += 4;
-            Ok((OscType::Vector6, value))
-        }
-        _ => {
-            Err(ParserError::InvalidType)
-        }
+
+        values.push(value);
     }
+
+    Ok(values)
 }
 
 fn parse(buf: &[u8]) -> Result<OscMessage, ParserError> {
@@ -207,15 +153,16 @@ fn parse(buf: &[u8]) -> Result<OscMessage, ParserError> {
         return Err(ParserError::InvalidFormat);
     }
 
-    let value = extract_osc_value(&buf, &mut index);
+    let value = extract_osc_values(&buf, &mut index);
     println!("Value: {:?}", value);
 
     return match (address, value) {
         (Ok(address), Ok(value)) => {
+
             Ok(OscMessage {
                 address: CString::new(address).unwrap().into_raw(),
-                osc_type: value.0,
-                value: value.1
+                value_length: value.len(),
+                value: value.into_boxed_slice(),
             })
         }
         (Err(e), _) => {
@@ -260,108 +207,47 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
     write_address(buf, &mut ix, address);
     buf[ix] = 44; // ,
     ix += 1;
-    match osc_template.osc_type {
-        OscType::Int => {
-            buf[ix] = 105; // i
-            buf[ix+1..ix + 3].copy_from_slice(&[0, 0]);
-            ix += 3;
-            let bytes = osc_template.value.int.to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-        }
-        OscType::Float => {
-            buf[ix] = 102; // f
-            buf[ix+1..ix + 3].copy_from_slice(&[0, 0]);
-            ix += 3;
-            let bytes = osc_template.value.float[0].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-        }
-        OscType::Bool => {
-            buf[ix] = if osc_template.value.bool { 84 } else { 70 }; // T or F
-            buf[ix + 1 ..ix + 3].copy_from_slice(&[0, 0]);
-            ix += 3;
-        }
-        OscType::String => {
-            println!("Not implemented yet!")
-        }
-        OscType::Vector2 => {
-            buf[ix] = 102; // f
-            buf[ix + 1] = 102;
-            buf[ix + 2] = 0;
-            ix += 3;
-            let bytes = osc_template.value.float[0].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-            let bytes = osc_template.value.float[1].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-        }
-        OscType::Vector3 => {
-            buf[ix] = 102; // f
-            buf[ix + 1] = 102;
-            buf[ix + 2] = 102;
-            buf[ix + 3..ix + 7].copy_from_slice(&[0, 0, 0, 0]);
-            ix += 7;
-            let bytes = osc_template.value.float[0].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-            let bytes = osc_template.value.float[1].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-            let bytes = osc_template.value.float[2].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-        }
-        OscType::Vector4 => {
-            buf[ix] = 102; // f
-            buf[ix + 1] = 102;
-            buf[ix + 2] = 102;
-            buf[ix + 3] = 102;
-            buf[ix + 4..ix + 7].copy_from_slice(&[0, 0, 0]);
-            ix += 7;
-            let bytes = osc_template.value.float[0].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-            let bytes = osc_template.value.float[1].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-            let bytes = osc_template.value.float[2].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-            let bytes = osc_template.value.float[3].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-        }
-        OscType::Vector6 => {
-            buf[ix] = 102; // f
-            buf[ix + 1] = 102;
-            buf[ix + 2] = 102;
-            buf[ix + 3] = 102;
-            buf[ix + 4] = 102;
-            buf[ix + 5] = 102;
-            buf[ix + 6..ix + 7].copy_from_slice(&[0]);
-            ix += 7;
-            let bytes = osc_template.value.float[0].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-            let bytes = osc_template.value.float[1].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-            let bytes = osc_template.value.float[2].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-            let bytes = osc_template.value.float[3].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-            let bytes = osc_template.value.float[4].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
-            let bytes = osc_template.value.float[5].to_be_bytes();
-            buf[ix..ix + 4].copy_from_slice(&bytes);
-            ix += 4;
+
+    for i in 0..osc_template.value_length {
+        let value = &osc_template.value[i];
+
+        let type_tag = match value.osc_type {
+            OscType::Int => 105, // i
+            OscType::Float =>  102, // f
+            OscType::Bool => {if value.bool { 84 } else { 70 }}, // T or F
+            _ => 0,
+        };
+        buf[ix] = type_tag;
+        ix += 1;
+    }
+
+    // Add a null
+    buf[ix] = 0;
+    ix += 1;
+    // Quanitze to 4 bytes
+    if ix % 4 != 0 {
+        buf[ix..ix + 4 - (ix % 4)].copy_from_slice(&[0, 0, 0][..4 - (ix % 4)]);
+        ix += 4 - (ix % 4);
+    }
+
+    for i in 0..osc_template.value_length {
+        let value = &osc_template.value[i];
+
+        match value.osc_type {
+            OscType::Int => {
+                let bytes = value.int.to_be_bytes();
+                buf[ix..ix + 4].copy_from_slice(&bytes);
+                ix += 4;
+            }
+            OscType::Float => {
+                let bytes = value.float.to_be_bytes();
+                buf[ix..ix + 4].copy_from_slice(&bytes);
+                ix += 4;
+            }
+            _ => {}
         }
     }
+
 
     ix
 }
@@ -432,10 +318,11 @@ mod tests {
         #[test]
         fn serialize_osc_message() {
             let mut buf: [u8; 4096] = [0; 4096];
+            let value = OscValue { osc_type: OscType::Bool, bool: true, ..Default::default() };
             let osc_message = OscMessage {
                 address: CString::new("/test_message/meme").unwrap().into_raw(),
-                osc_type: OscType::Bool,
-                value: OscValue { bool: true, ..Default::default() },
+                value_length: 1,
+                value: [value; 1].into(),
             };
 
             let id = create_osc_message(buf.as_mut_ptr(), &osc_message);
@@ -444,45 +331,12 @@ mod tests {
                     // Convert the address string ptr to a literal string and compare
                     let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
                     assert_eq!(address, "/test_message/meme", "Address was resolved incorrectly.");
-                    assert_eq!(message.value.bool, true, "Value was resolved incorrectly.");
+                    assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
+                    assert_eq!(message.value[0].osc_type, OscType::Bool, "Value was resolved incorrectly.");
+                    assert_eq!(message.value[0].bool, true, "Value was resolved incorrectly.");
                 }
                 Err(_) => assert!(false, "Failed to parse message."),
             }
-        }
-
-        #[test]
-        fn serialize_osc_bundle() {
-            // Create an array consisting of three messages
-            let osc_message1 = OscMessage {
-                address: CString::new("/test_message/meme").unwrap().into_raw(),
-                osc_type: OscType::Int,
-                value: OscValue { int: 42, ..Default::default() },
-            };
-            let osc_message2 = OscMessage {
-                address: CString::new("/test_message/meme2").unwrap().into_raw(),
-                osc_type: OscType::Float,
-                value: OscValue { float: [3.14, 0.0, 0.0, 0.0, 0.0, 0.0], ..Default::default() },
-            };
-            let osc_message3 = OscMessage {
-                address: CString::new("/test_message/meme3").unwrap().into_raw(),
-                osc_type: OscType::Vector3,
-                value: OscValue { float: [1.0, 2.0, 3.0, 0.0, 0.0, 0.0], ..Default::default() },
-            };
-            let osc_message4 = OscMessage {
-                address: CString::new("/test_message/meme3").unwrap().into_raw(),
-                osc_type: OscType::Bool,
-                value: OscValue { bool: true, ..Default::default() },
-            };
-            let messages = [osc_message1, osc_message2, osc_message3, osc_message4];
-
-            let mut buf: [u8; 4096] = [0; 4096];
-            let mut index: usize = 0;
-            let len1 = create_osc_bundle(buf.as_mut_ptr(), messages.as_ptr(), messages.len(), &mut index);
-
-            index = 1;
-            let len2 = create_osc_bundle(buf.as_mut_ptr(), messages.as_ptr(), messages.len(), &mut index);
-
-            assert!(len2 < len1, "Length of bundle was not calculated correctly. Second bundle should be smaller than the first.");
         }
     }
 
@@ -498,7 +352,9 @@ mod tests {
                     // Convert the address string ptr to a literal string and compare
                     let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
-                    assert_eq!(message.value.bool, true, "Value was resolved incorrectly.");
+                    assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
+                    assert_eq!(message.value[0].osc_type, OscType::Bool, "Value type was resolved incorrectly.");
+                    assert_eq!(message.value[0].bool, true, "Value was resolved incorrectly.");
                 }
                 Err(e) => {
                     panic!("Error: {:?}", e);
@@ -514,7 +370,9 @@ mod tests {
                     // Convert the address string ptr to a literal string and compare
                     let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
-                    assert_eq!(message.value.int, 9, "Value was resolved incorrectly.");
+                    assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
+                    assert_eq!(message.value[0].osc_type, OscType::Int, "Value type was resolved incorrectly.");
+                    assert_eq!(message.value[0].int, 9, "Value was resolved incorrectly.");
                 }
                 Err(e) => {
                     panic!("Error: {:?}", e);
@@ -538,7 +396,9 @@ mod tests {
                     // Convert the address string ptr to a literal string and compare
                     let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
-                    assert_eq!(message.value.float[0], 69.42, "Value was resolved incorrectly.");
+                    assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
+                    assert_eq!(message.value[0].osc_type, OscType::Float, "Value type was resolved incorrectly.");
+                    assert_eq!(message.value[0].float, 69.42, "Value was resolved incorrectly.");
                 }
                 Err(e) => {
                     panic!("Error: {:?}", e);
@@ -554,93 +414,11 @@ mod tests {
                     // Convert the address string ptr to a literal string and compare
                     let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
+                    assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
+                    assert_eq!(message.value[0].osc_type, OscType::String, "Value type was resolved incorrectly.");
                     // Convert the string ptr to a literal string and compare
-                    let string = unsafe { CStr::from_ptr(message.value.string) }.to_str().unwrap();
+                    let string = unsafe { CStr::from_ptr(message.value[0].string) }.to_str().unwrap();
                     assert_eq!(string, "hello", "Value was resolved incorrectly.");
-                }
-                Err(e) => {
-                    panic!("Error: {:?}", e);
-                }
-            }
-        }
-
-        #[test]
-        fn parse_vector2() {
-            // Get [1.0, 2.0] as a big endian array of bytes. Should be 8 bytes long.
-            let bytes = [1.0_f32, 2.0_f32].iter().fold([0; 8], |mut acc, &x| {
-                acc[..4].copy_from_slice(&x.to_be_bytes());
-                acc.rotate_left(4);
-                acc
-            });
-            let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 102, 102, 0];
-
-            // Concatenate the two arrays
-            let mut recv_bytes = [0; 20];
-            recv_bytes[..12].copy_from_slice(&buf);
-            recv_bytes[12..].copy_from_slice(&bytes);
-
-            match parse(&recv_bytes) {
-                Ok(message) => {
-                    // Convert the address string ptr to a literal string and compare
-                    let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
-                    assert_eq!(address, "/test", "Address was resolved incorrectly.");
-                    assert_eq!(message.value.float[..2], [1.0, 2.0], "Value was resolved incorrectly.");
-                }
-                Err(e) => {
-                    panic!("Error: {:?}", e);
-                }
-            }
-        }
-
-        #[test]
-        fn parse_vector3() {
-            // Get [1.0, 2.0, 3.0] as a big endian array of bytes. Should be 12 bytes long.
-            let bytes = [1.0_f32, 2.0_f32, 3.0_f32].iter().fold([0; 12], |mut acc, &x| {
-                acc[..4].copy_from_slice(&x.to_be_bytes());
-                acc.rotate_left(4);
-                acc
-            });
-            let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 102, 102, 102, 0, 0, 0, 0];
-
-            // Concatenate the two arrays
-            let mut recv_bytes = [0; 28];
-            recv_bytes[..16].copy_from_slice(&buf);
-            recv_bytes[16..].copy_from_slice(&bytes);
-
-            match parse(&recv_bytes) {
-                Ok(message) => {
-                    // Convert the address string ptr to a literal string and compare
-                    let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
-                    assert_eq!(address, "/test", "Address was resolved incorrectly.");
-                    assert_eq!(message.value.float[..3], [1.0, 2.0, 3.0], "Value was resolved incorrectly.");
-                }
-                Err(e) => {
-                    panic!("Error: {:?}", e);
-                }
-            }
-        }
-
-        #[test]
-        fn parse_vector4() {
-            // Get [1.0, 2.0, 3.0, 4.0] as a big endian array of bytes. Should be 16 bytes long.
-            let bytes = [1.0_f32, 2.0_f32, 3.0_f32, 4.0_f32].iter().fold([0; 16], |mut acc, &x| {
-                acc[..4].copy_from_slice(&x.to_be_bytes());
-                acc.rotate_left(4);
-                acc
-            });
-            let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 102, 102, 102, 102, 0, 0, 0];
-
-            // Concatenate the two arrays
-            let mut recv_bytes = [0; 32];
-            recv_bytes[..16].copy_from_slice(&buf);
-            recv_bytes[16..].copy_from_slice(&bytes);
-
-            match parse(&recv_bytes) {
-                Ok(message) => {
-                    // Convert the address string ptr to a literal string and compare
-                    let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
-                    assert_eq!(address, "/test", "Address was resolved incorrectly.");
-                    assert_eq!(message.value.float[..4], [1.0, 2.0, 3.0, 4.0], "Value was resolved incorrectly.");
                 }
                 Err(e) => {
                     panic!("Error: {:?}", e);
@@ -668,7 +446,12 @@ mod tests {
                     // Convert the address string ptr to a literal string and compare
                     let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
-                    assert_eq!(message.value.float[..6], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], "Value was resolved incorrectly.");
+                    assert_eq!(message.value_length, 6, "Value length was resolved incorrectly.");
+                    // Check all the values to ensure they're all floats and equal to the expected values
+                    for i in 0..6 {
+                        assert_eq!(message.value[i].osc_type, OscType::Float, "Value type was resolved incorrectly.");
+                        assert_eq!(message.value[i].float, i as f32 + 1.0, "Value was resolved incorrectly.");
+                    }
                 }
                 Err(e) => {
                     panic!("Error: {:?}", e);
