@@ -52,7 +52,11 @@ fn extract_osc_address(buf: &[u8], ix: &mut usize) -> Result<String, ParserError
 
     let mut address = String::new();
 
-    while *ix <= buf.len() && buf[*ix] != 0 { // *ix >= buf.len() // Cheers sutekh!
+    /*
+     * Patching OBO bug
+     * ~ Sutekh
+     */
+    while *ix <= buf.len()-1 && buf[*ix] != 0 {
         address.push(buf[*ix] as char);
         *ix += 1;
     }
