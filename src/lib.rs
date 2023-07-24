@@ -130,10 +130,15 @@ fn extract_osc_values(buf: &[u8], ix: &mut usize) -> Result<Vec<OscValue>, Parse
                 *ix += 1;
                 value.string = CString::new(string).unwrap().into_raw();
                 value.osc_type = OscType::String;
+
             }
             _ => {
                 continue;
             }
+        }
+
+        if *ix % 4 != 0 {
+            *ix += 4 - (*ix % 4);
         }
 
         values.push(value);
@@ -142,22 +147,21 @@ fn extract_osc_values(buf: &[u8], ix: &mut usize) -> Result<Vec<OscValue>, Parse
     Ok(values)
 }
 
-fn parse(buf: &[u8]) -> Result<OscMessage, ParserError> {
+fn parse(buf: &[u8], index: &mut usize) -> Result<OscMessage, ParserError> {
     // Ensure our buffer is at least 4 bytes long
     if buf.len() < 4 {  // Cheers sutekh!
         return Err(ParserError::InvalidFormat);
     }
 
-    let mut index = 0;
-    let address = extract_osc_address(&buf, &mut index);
+    let address = extract_osc_address(&buf, index);
     println!("Address: {:?}", address);
 
     // Ensure we still have data
-    if index >= buf.len() { // Cheers sutekh!
+    if index >= &mut buf.len() { // Cheers sutekh!
         return Err(ParserError::InvalidFormat);
     }
 
-    let value = extract_osc_values(&buf, &mut index);
+    let value = extract_osc_values(&buf, index);
     println!("Value: {:?}", value);
 
     return match (address, value) {
@@ -180,9 +184,9 @@ fn parse(buf: &[u8]) -> Result<OscMessage, ParserError> {
 
 // Import a byte array from C# and parse it
 #[no_mangle]
-pub extern "C" fn parse_osc(buf: *const c_uchar, len: usize, msg: &mut OscMessage) -> bool {
+pub extern "C" fn parse_osc(buf: *const c_uchar, len: usize, index: &mut usize, msg: &mut OscMessage) -> bool {
     let buf = unsafe { slice::from_raw_parts(buf, len) };
-    match parse(buf) {
+    match parse(buf, index) {
         Ok(parsed_msg) => {
             *msg = parsed_msg; // update the provided OscMessage with the parsed message
             true
@@ -329,15 +333,51 @@ mod tests {
                 value: [value; 1].into(),
             };
 
-            let id = create_osc_message(buf.as_mut_ptr(), &osc_message);
-            match parse(&buf) {
+            let index = create_osc_message(buf.as_mut_ptr(), &osc_message);
+            assert_eq!(index, 24, "Incorrect index returned.");
+            let mut parse_index = 0;
+            match parse(&buf, &mut parse_index) {
                 Ok(message) => {
                     // Convert the address string ptr to a literal string and compare
                     let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(parse_index, 24, "Incorrect parse index returned.");
                     assert_eq!(address, "/test_message/meme", "Address was resolved incorrectly.");
                     assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
                     assert_eq!(message.value[0].osc_type, OscType::Bool, "Value was resolved incorrectly.");
                     assert_eq!(message.value[0].bool, true, "Value was resolved incorrectly.");
+                }
+                Err(_) => assert!(false, "Failed to parse message."),
+            }
+        }
+
+        #[test]
+        fn serialize_message_multiple_values() {
+            let mut buf: [u8; 4096] = [0; 4096];
+            let value1 = OscValue { osc_type: OscType::Bool, bool: true, ..Default::default() };
+            let value2 = OscValue { osc_type: OscType::Int, int: 69, ..Default::default() };
+            let value3 = OscValue { osc_type: OscType::Float, float: 69.42, ..Default::default() };
+            let osc_message = OscMessage {
+                address: CString::new("/test_message/meme").unwrap().into_raw(),
+                value_length: 3,
+                value: [value1, value2, value3].into(),
+            };
+
+            let index = create_osc_message(buf.as_mut_ptr(), &osc_message);
+            assert_eq!(index, 36, "Incorrect index returned.");
+            let mut parse_index = 0;
+            match parse(&buf, &mut parse_index) {
+                Ok(message) => {
+                    // Convert the address string ptr to a literal string and compare
+                    let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(parse_index, 36, "Incorrect parse index returned.");
+                    assert_eq!(address, "/test_message/meme", "Address was resolved incorrectly.");
+                    assert_eq!(message.value_length, 3, "Value length was resolved incorrectly.");
+                    assert_eq!(message.value[0].osc_type, OscType::Bool, "Value was resolved incorrectly.");
+                    assert_eq!(message.value[0].bool, true, "Value was resolved incorrectly.");
+                    assert_eq!(message.value[1].osc_type, OscType::Int, "Value was resolved incorrectly.");
+                    assert_eq!(message.value[1].int, 69, "Value was resolved incorrectly.");
+                    assert_eq!(message.value[2].osc_type, OscType::Float, "Value was resolved incorrectly.");
+                    assert_eq!(message.value[2].float, 69.42, "Value was resolved incorrectly.");
                 }
                 Err(_) => assert!(false, "Failed to parse message."),
             }
@@ -351,10 +391,12 @@ mod tests {
         #[test]
         fn parse_bool() {
             let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 84, 0, 0];
-            match parse(&buf) {
+            let mut parse_index = 0;
+            match parse(&buf, &mut parse_index) {
                 Ok(message) => {
                     // Convert the address string ptr to a literal string and compare
                     let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(parse_index, 12, "Incorrect parse index returned.");
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
                     assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
                     assert_eq!(message.value[0].osc_type, OscType::Bool, "Value type was resolved incorrectly.");
@@ -369,10 +411,12 @@ mod tests {
         #[test]
         fn parse_int() {
             let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 105, 0, 0, 0, 0, 0, 9];
-            match parse(&buf) {
+            let mut parse_index = 0;
+            match parse(&buf, &mut parse_index) {
                 Ok(message) => {
                     // Convert the address string ptr to a literal string and compare
                     let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(parse_index, 16, "Incorrect parse index returned.");
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
                     assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
                     assert_eq!(message.value[0].osc_type, OscType::Int, "Value type was resolved incorrectly.");
@@ -395,10 +439,12 @@ mod tests {
             recv_bytes[..12].copy_from_slice(&buf);
             recv_bytes[12..].copy_from_slice(&bytes);
 
-            match parse(&recv_bytes) {
+            let mut parse_index = 0;
+            match parse(&recv_bytes, &mut parse_index) {
                 Ok(message) => {
                     // Convert the address string ptr to a literal string and compare
                     let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(parse_index, 16, "Incorrect parse index returned.");
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
                     assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
                     assert_eq!(message.value[0].osc_type, OscType::Float, "Value type was resolved incorrectly.");
@@ -413,10 +459,12 @@ mod tests {
         #[test]
         fn parse_string() {
             let buf = [47, 116, 101, 115, 116, 0, 0, 0, 44, 115, 0, 0, 104, 101, 108, 108, 111, 0, 0, 0];
-            match parse(&buf) {
+            let mut parse_index = 0;
+            match parse(&buf, &mut parse_index) {
                 Ok(message) => {
                     // Convert the address string ptr to a literal string and compare
                     let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(parse_index, 20, "Incorrect parse index returned.");
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
                     assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
                     assert_eq!(message.value[0].osc_type, OscType::String, "Value type was resolved incorrectly.");
@@ -445,10 +493,12 @@ mod tests {
             recv_bytes[..16].copy_from_slice(&buf);
             recv_bytes[16..].copy_from_slice(&bytes);
 
-            match parse(&recv_bytes) {
+            let mut parse_index = 0;
+            match parse(&recv_bytes, &mut parse_index) {
                 Ok(message) => {
                     // Convert the address string ptr to a literal string and compare
                     let address = unsafe { CStr::from_ptr(message.address) }.to_str().unwrap();
+                    assert_eq!(parse_index, 40, "Incorrect parse index returned.");
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
                     assert_eq!(message.value_length, 6, "Value length was resolved incorrectly.");
                     // Check all the values to ensure they're all floats and equal to the expected values
