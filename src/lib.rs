@@ -2,6 +2,13 @@ use std::ffi::{c_char, c_uchar, CStr, CString};
 use std::slice;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+macro_rules! println {
+    ($($arg:tt)*) => ({
+        #[cfg(debug_assertions)]
+        std::println!($($arg)*);
+    })
+}
+
 #[derive(Debug)]
 #[repr(C)]
 pub enum ParserError {
