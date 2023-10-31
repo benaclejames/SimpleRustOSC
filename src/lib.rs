@@ -32,6 +32,8 @@ pub enum OscType {
     Float,
     Bool,
     String,
+    ArrayBegin,
+    ArrayEnd
 }
 
 #[derive(Debug)]
@@ -139,6 +141,12 @@ fn extract_osc_values(buf: &[u8], ix: &mut usize) -> Result<Vec<OscValue>, Parse
                 value.osc_type = OscType::String;
 
             }
+            '[' => {
+                value.osc_type = OscType::ArrayBegin;
+            }
+            ']' => {
+                value.osc_type = OscType::ArrayEnd;
+            }
             _ => {
                 continue;
             }
@@ -227,11 +235,13 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
         let value = &osc_template.value[i];
 
         let type_tag = match value.osc_type {
-            OscType::Int => 105, // i
-            OscType::Float =>  102, // f
-            OscType::Bool => {if value.bool { 84 } else { 70 }}, // T or F
-            _ => 0,
-        };
+            OscType::Int => 'i', // i
+            OscType::Float =>  'f', // f
+            OscType::Bool => {if value.bool { 'T' } else { 'F' }}, // T or F
+            OscType::ArrayBegin => '[',
+            OscType::ArrayEnd => ']',
+            _ => '\0',
+        } as c_uchar;
         buf[ix] = type_tag;
         ix += 1;
     }
