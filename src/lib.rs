@@ -1,4 +1,6 @@
 use std::ffi::{c_char, c_uchar, CStr, CString};
+use std::mem::forget;
+use std::ptr::null;
 use std::slice;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -199,15 +201,36 @@ fn parse(buf: &[u8], index: &mut usize) -> Result<OscMessage, ParserError> {
 
 // Import a byte array from C# and parse it
 #[no_mangle]
-pub extern "C" fn parse_osc(buf: *const c_uchar, len: usize, index: &mut usize, msg: &mut OscMessage) -> bool {
+pub extern "C" fn parse_osc(buf: *const c_uchar, len: usize, index: &mut usize) -> *const OscMessage {
     let buf = unsafe { slice::from_raw_parts(buf, len) };
     match parse(buf, index) {
         Ok(parsed_msg) => {
-            *msg = parsed_msg; // update the provided OscMessage with the parsed message
-            true
+            let boxed_message = Box::new(parsed_msg);
+            let raw_ptr: *const OscMessage = Box::into_raw(boxed_message);
+            forget(raw_ptr);
+            raw_ptr
         }
-        Err(_) => false,
+        Err(_) => null(),
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn free_osc_message(ptr: *const OscMessage) {
+    // Here we convert the ptr back to an osc message, therefore informing GC of it's existence once again
+    if ptr.is_null() {
+        return;
+    }
+
+    let message = Box::from_raw(ptr as *mut OscMessage);
+    for value in message.value.iter() {
+        if value.string != null() {
+            let value_str = CString::from_raw(value.string as *mut c_char);
+            drop(value_str);
+        }
+    }
+    let address = CString::from_raw(message.address as *mut c_char);
+    drop(address);
+    drop(message);
 }
 
 fn write_address(buf: &mut [u8], ix: &mut usize, address: &str) {
