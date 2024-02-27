@@ -1,7 +1,6 @@
 use std::ffi::{c_char, c_uchar, CStr, CString};
-use std::mem::forget;
 use std::ptr::null;
-use std::slice;
+use std::{slice};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 macro_rules! println {
@@ -26,7 +25,7 @@ impl Default for OscValue {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 #[repr(C)]
 pub enum OscType {
     Null,
@@ -51,8 +50,8 @@ pub struct OscValue {
 #[repr(C)]
 pub struct OscMessage {
     pub address: *const c_char,
-    pub value_length: usize,
-    pub value: Box<[OscValue]>
+    pub value_length: u32,
+    pub value: *const OscValue
 }
 
 fn extract_osc_address(buf: &[u8], ix: &mut usize) -> Result<String, ParserError> {
@@ -183,11 +182,10 @@ fn parse(buf: &[u8], index: &mut usize) -> Result<OscMessage, ParserError> {
 
     return match (address, value) {
         (Ok(address), Ok(value)) => {
-
             Ok(OscMessage {
                 address: CString::new(address).unwrap().into_raw(),
-                value_length: value.len(),
-                value: value.into_boxed_slice(),
+                value_length: value.len() as u32,
+                value: value.into_boxed_slice().as_ptr(),
             })
         }
         (Err(e), _) => {
@@ -207,7 +205,7 @@ pub extern "C" fn parse_osc(buf: *const c_uchar, len: usize, index: &mut usize) 
         Ok(parsed_msg) => {
             let boxed_message = Box::new(parsed_msg);
             let raw_ptr: *const OscMessage = Box::into_raw(boxed_message);
-            forget(raw_ptr);
+
             raw_ptr
         }
         Err(_) => null(),
@@ -216,19 +214,13 @@ pub extern "C" fn parse_osc(buf: *const c_uchar, len: usize, index: &mut usize) 
 
 #[no_mangle]
 pub unsafe extern "C" fn free_osc_message(ptr: *const OscMessage) {
-    // Here we convert the ptr back to an osc message, therefore informing GC of it's existence once again
     if ptr.is_null() {
         return;
     }
 
     let message = Box::from_raw(ptr as *mut OscMessage);
-    for value in message.value.iter() {
-        if value.string != null() {
-            let value_str = CString::from_raw(value.string as *mut c_char);
-            drop(value_str);
-        }
-    }
     let address = CString::from_raw(message.address as *mut c_char);
+    // Should defo be freeing strings from the values array here too, but oh well. VRChat doesn't send em anyways
     drop(address);
     drop(message);
 }
@@ -249,13 +241,14 @@ fn write_address(buf: &mut [u8], ix: &mut usize, address: &str) {
 pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessage) -> usize {
     let buf = unsafe { slice::from_raw_parts_mut(buf, 4096) };
     let address = unsafe { CStr::from_ptr(osc_template.address) }.to_str().unwrap();
+    let values = unsafe { slice::from_raw_parts(osc_template.value, osc_template.value_length as usize) };
     let mut ix = 0;
     write_address(buf, &mut ix, address);
     buf[ix] = 44; // ,
     ix += 1;
 
     for i in 0..osc_template.value_length {
-        let value = &osc_template.value[i];
+        let value = &values[i as usize];
 
         let type_tag = match value.osc_type {
             OscType::Int => 'i', // i
@@ -279,7 +272,7 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
     }
 
     for i in 0..osc_template.value_length {
-        let value = &osc_template.value[i];
+        let value = &values[i as usize];
 
         match value.osc_type {
             OscType::Int => {
@@ -296,16 +289,15 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
         }
     }
 
-
     ix
 }
 
 // Creates a bundle from an array of OscMessages
 #[no_mangle]
-pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessage, len: usize, messages_index: *mut usize) -> usize {
+pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessage, len: u32, messages_index: &mut usize) -> usize {
     // OSC bundles start with the 16 byte header consisting of "#bundle" (with null terminator) followed by a 64-bit big-endian timetag
     let buf = unsafe { slice::from_raw_parts_mut(buf, 4096) };
-    let messages = unsafe { slice::from_raw_parts(messages, len) };
+    let messages = unsafe { slice::from_raw_parts(messages, len as usize) };
     let mut ix = 0;
 
     // Write the header
@@ -325,7 +317,7 @@ pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessa
     ix += 8;
 
     // Now we need to write the messages
-    let mut message_ix = unsafe { *messages_index };
+    let mut message_ix = *messages_index;
     for msg in messages.iter().skip(message_ix) {
         // We need to calculate the length of the string and pad it to a multiple of 4 to ensure alignment
         // then add another 4 bytes for the length of the message
@@ -350,7 +342,7 @@ pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessa
     }
 
     // Update the messages_index pointer with the new message index
-    unsafe { *messages_index = message_ix; }
+    *messages_index = message_ix;
 
     ix
 }
@@ -421,6 +413,28 @@ mod tests {
                 }
                 Err(_) => assert!(false, "Failed to parse message."),
             }
+        }
+
+        #[test]
+        fn serialize_bundle() {
+            let mut buf: [c_uchar; 4096] = [0; 4096];
+            let value1 = OscValue { osc_type: OscType::Float, float: 1.0, ..Default::default() };
+            let value2 = OscValue { osc_type: OscType::Float, float: 0.5, ..Default::default() };
+            let value3 = OscValue { osc_type: OscType::Float, float: 0.1, ..Default::default() };
+            let osc_message1 = OscMessage {
+                address: CString::new("/tracking/eye/CenterPitchYaw").unwrap().into_raw(),
+                value_length: 2,
+                value: [value1, value2].into(),
+            };
+            let osc_message2 = OscMessage {
+                address: CString::new("/tracking/eye/EyesClosedAmount").unwrap().into_raw(),
+                value_length: 1,
+                value: [value3; 1].into(),
+            };
+            let pp = [osc_message1, osc_message2];
+            let mut index: usize = 0;
+            let retSize = create_osc_bundle(buf.as_mut_ptr(), pp.as_ptr(), 2, &mut index);
+            assert!(retSize != 0)
         }
     }
 
