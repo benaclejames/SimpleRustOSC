@@ -294,7 +294,7 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
 
 // Creates a bundle from an array of OscMessages
 #[no_mangle]
-pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessage, len: u32, messages_index: &mut usize) -> usize {
+pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessage, len: u32, messages_index: &mut u32) -> usize {
     // OSC bundles start with the 16 byte header consisting of "#bundle" (with null terminator) followed by a 64-bit big-endian timetag
     let buf = unsafe { slice::from_raw_parts_mut(buf, 4096) };
     let messages = unsafe { slice::from_raw_parts(messages, len as usize) };
@@ -317,8 +317,7 @@ pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessa
     ix += 8;
 
     // Now we need to write the messages
-    let mut message_ix = *messages_index;
-    for msg in messages.iter().skip(message_ix) {
+    for msg in messages.iter().skip(*messages_index as usize) {
         // We need to calculate the length of the string and pad it to a multiple of 4 to ensure alignment
         // then add another 4 bytes for the length of the message
         // If adding it would go over the buffer size, return
@@ -338,11 +337,8 @@ pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessa
         ix += length + 4;
 
         // Update the message index after each iteration
-        message_ix += 1;
+        *messages_index += 1;
     }
-
-    // Update the messages_index pointer with the new message index
-    *messages_index = message_ix;
 
     ix
 }
@@ -432,7 +428,7 @@ mod tests {
                 value: [value3; 1].into(),
             };
             let pp = [osc_message1, osc_message2];
-            let mut index: usize = 0;
+            let mut index: u32 = 0;
             let retSize = create_osc_bundle(buf.as_mut_ptr(), pp.as_ptr(), 2, &mut index);
             assert!(retSize != 0)
         }
