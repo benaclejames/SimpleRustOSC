@@ -360,7 +360,7 @@ mod tests {
             let osc_message = OscMessage {
                 address: CString::new("/test_message/meme").unwrap().into_raw(),
                 value_length: 1,
-                value: [value; 1].into(),
+                value: vec!(value).into_boxed_slice().as_ptr()
             };
 
             let index = create_osc_message(buf.as_mut_ptr(), &osc_message);
@@ -373,8 +373,9 @@ mod tests {
                     assert_eq!(parse_index, 24, "Incorrect parse index returned.");
                     assert_eq!(address, "/test_message/meme", "Address was resolved incorrectly.");
                     assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
-                    assert_eq!(message.value[0].osc_type, OscType::Bool, "Value was resolved incorrectly.");
-                    assert_eq!(message.value[0].bool, true, "Value was resolved incorrectly.");
+                    let values = unsafe { slice::from_raw_parts(message.value, message.value_length as usize) };
+                    assert_eq!(values[0].osc_type, OscType::Bool, "Value was resolved incorrectly.");
+                    assert_eq!(values[0].bool, true, "Value was resolved incorrectly.");
                 }
                 Err(_) => assert!(false, "Failed to parse message."),
             }
@@ -389,7 +390,7 @@ mod tests {
             let osc_message = OscMessage {
                 address: CString::new("/test_message/meme").unwrap().into_raw(),
                 value_length: 3,
-                value: [value1, value2, value3].into(),
+                value: vec![value1, value2, value3].into_boxed_slice().as_ptr(),
             };
 
             let index = create_osc_message(buf.as_mut_ptr(), &osc_message);
@@ -402,12 +403,13 @@ mod tests {
                     assert_eq!(parse_index, 36, "Incorrect parse index returned.");
                     assert_eq!(address, "/test_message/meme", "Address was resolved incorrectly.");
                     assert_eq!(message.value_length, 3, "Value length was resolved incorrectly.");
-                    assert_eq!(message.value[0].osc_type, OscType::Bool, "Value was resolved incorrectly.");
-                    assert_eq!(message.value[0].bool, true, "Value was resolved incorrectly.");
-                    assert_eq!(message.value[1].osc_type, OscType::Int, "Value was resolved incorrectly.");
-                    assert_eq!(message.value[1].int, 69, "Value was resolved incorrectly.");
-                    assert_eq!(message.value[2].osc_type, OscType::Float, "Value was resolved incorrectly.");
-                    assert_eq!(message.value[2].float, 69.42, "Value was resolved incorrectly.");
+                    let value = unsafe { slice::from_raw_parts(message.value, message.value_length as usize) };
+                    assert_eq!(value[0].osc_type, OscType::Bool, "Value was resolved incorrectly.");
+                    assert_eq!(value[0].bool, true, "Value was resolved incorrectly.");
+                    assert_eq!(value[1].osc_type, OscType::Int, "Value was resolved incorrectly.");
+                    assert_eq!(value[1].int, 69, "Value was resolved incorrectly.");
+                    assert_eq!(value[2].osc_type, OscType::Float, "Value was resolved incorrectly.");
+                    assert_eq!(value[2].float, 69.42, "Value was resolved incorrectly.");
                 }
                 Err(_) => assert!(false, "Failed to parse message."),
             }
@@ -422,17 +424,17 @@ mod tests {
             let osc_message1 = OscMessage {
                 address: CString::new("/tracking/eye/CenterPitchYaw").unwrap().into_raw(),
                 value_length: 2,
-                value: [value1, value2].into(),
+                value: vec![value1, value2].into_boxed_slice().as_ptr(),
             };
             let osc_message2 = OscMessage {
                 address: CString::new("/tracking/eye/EyesClosedAmount").unwrap().into_raw(),
                 value_length: 1,
-                value: [value3; 1].into(),
+                value: vec![value3].into_boxed_slice().as_ptr(),
             };
             let pp = [osc_message1, osc_message2];
             let mut index: u32 = 0;
-            let retSize = create_osc_bundle(buf.as_mut_ptr(), pp.as_ptr(), 2, &mut index);
-            assert!(retSize != 0)
+            let ret_size = create_osc_bundle(buf.as_mut_ptr(), pp.as_ptr(), 2, &mut index);
+            assert_ne!(ret_size, 0)
         }
     }
 
@@ -451,8 +453,9 @@ mod tests {
                     assert_eq!(parse_index, 12, "Incorrect parse index returned.");
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
                     assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
-                    assert_eq!(message.value[0].osc_type, OscType::Bool, "Value type was resolved incorrectly.");
-                    assert_eq!(message.value[0].bool, true, "Value was resolved incorrectly.");
+                    let value = unsafe { slice::from_raw_parts(message.value, message.value_length as usize) };
+                    assert_eq!(value[0].osc_type, OscType::Bool, "Value type was resolved incorrectly.");
+                    assert_eq!(value[0].bool, true, "Value was resolved incorrectly.");
                 }
                 Err(e) => {
                     panic!("Error: {:?}", e);
@@ -471,8 +474,9 @@ mod tests {
                     assert_eq!(parse_index, 16, "Incorrect parse index returned.");
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
                     assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
-                    assert_eq!(message.value[0].osc_type, OscType::Int, "Value type was resolved incorrectly.");
-                    assert_eq!(message.value[0].int, 9, "Value was resolved incorrectly.");
+                    let value = unsafe { slice::from_raw_parts(message.value, message.value_length as usize) };
+                    assert_eq!(value[0].osc_type, OscType::Int, "Value type was resolved incorrectly.");
+                    assert_eq!(value[0].int, 9, "Value was resolved incorrectly.");
                 }
                 Err(e) => {
                     panic!("Error: {:?}", e);
@@ -499,8 +503,9 @@ mod tests {
                     assert_eq!(parse_index, 16, "Incorrect parse index returned.");
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
                     assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
-                    assert_eq!(message.value[0].osc_type, OscType::Float, "Value type was resolved incorrectly.");
-                    assert_eq!(message.value[0].float, 69.42, "Value was resolved incorrectly.");
+                    let value = unsafe { slice::from_raw_parts(message.value, message.value_length as usize) };
+                    assert_eq!(value[0].osc_type, OscType::Float, "Value type was resolved incorrectly.");
+                    assert_eq!(value[0].float, 69.42, "Value was resolved incorrectly.");
                 }
                 Err(e) => {
                     panic!("Error: {:?}", e);
@@ -519,9 +524,10 @@ mod tests {
                     assert_eq!(parse_index, 20, "Incorrect parse index returned.");
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
                     assert_eq!(message.value_length, 1, "Value length was resolved incorrectly.");
-                    assert_eq!(message.value[0].osc_type, OscType::String, "Value type was resolved incorrectly.");
+                    let value = unsafe { slice::from_raw_parts(message.value, message.value_length as usize) };
+                    assert_eq!(value[0].osc_type, OscType::String, "Value type was resolved incorrectly.");
                     // Convert the string ptr to a literal string and compare
-                    let string = unsafe { CStr::from_ptr(message.value[0].string) }.to_str().unwrap();
+                    let string = unsafe { CStr::from_ptr(value[0].string) }.to_str().unwrap();
                     assert_eq!(string, "hello", "Value was resolved incorrectly.");
                 }
                 Err(e) => {
@@ -553,10 +559,11 @@ mod tests {
                     assert_eq!(parse_index, 40, "Incorrect parse index returned.");
                     assert_eq!(address, "/test", "Address was resolved incorrectly.");
                     assert_eq!(message.value_length, 6, "Value length was resolved incorrectly.");
+                    let value = unsafe { slice::from_raw_parts(message.value, message.value_length as usize) };
                     // Check all the values to ensure they're all floats and equal to the expected values
                     for i in 0..6 {
-                        assert_eq!(message.value[i].osc_type, OscType::Float, "Value type was resolved incorrectly.");
-                        assert_eq!(message.value[i].float, i as f32 + 1.0, "Value was resolved incorrectly.");
+                        assert_eq!(value[i].osc_type, OscType::Float, "Value type was resolved incorrectly.");
+                        assert_eq!(value[i].float, i as f32 + 1.0, "Value was resolved incorrectly.");
                     }
                 }
                 Err(e) => {
