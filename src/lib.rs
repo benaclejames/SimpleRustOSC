@@ -199,10 +199,12 @@ fn parse(buf: &[u8], index: &mut usize) -> Result<OscMessage, ParserError> {
 
 // Import a byte array from C# and parse it
 #[no_mangle]
-pub extern "C" fn parse_osc(buf: *const c_uchar, len: usize, index: &mut usize) -> *const OscMessage {
+pub extern "C" fn parse_osc(buf: *const c_uchar, len: usize, index: &mut i32) -> *const OscMessage {
     let buf = unsafe { slice::from_raw_parts(buf, len) };
-    match parse(buf, index) {
+    let size: &mut usize = &mut (*index as usize);
+    match parse(buf, size) {
         Ok(parsed_msg) => {
+            *index += *size as i32;
             let boxed_message = Box::new(parsed_msg);
             let raw_ptr: *const OscMessage = Box::into_raw(boxed_message);
 
