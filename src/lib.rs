@@ -1,6 +1,7 @@
 use std::ffi::{c_char, c_uchar, CStr, CString};
 use std::ptr::null;
 use std::{slice};
+use std::mem::ManuallyDrop;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 macro_rules! println {
@@ -182,10 +183,11 @@ fn parse(buf: &[u8], index: &mut usize) -> Result<OscMessage, ParserError> {
 
     return match (address, value) {
         (Ok(address), Ok(value)) => {
+            let value = ManuallyDrop::new(value);
             Ok(OscMessage {
                 address: CString::new(address).unwrap().into_raw(),
                 value_length: value.len() as u32,
-                value: value.into_boxed_slice().as_ptr(),
+                value: value.as_slice().as_ptr(),
             })
         }
         (Err(e), _) => {
