@@ -1,7 +1,6 @@
 use std::ffi::{c_char, c_uchar, CStr, CString};
 use std::ptr::null;
 use std::{slice};
-use std::mem::ManuallyDrop;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 macro_rules! println {
@@ -51,7 +50,7 @@ pub struct OscValue {
 #[repr(C)]
 pub struct OscMessage {
     pub address: *const c_char,
-    pub value_length: u32,
+    pub value_length: i32,
     pub value: *const OscValue
 }
 
@@ -183,11 +182,10 @@ fn parse(buf: &[u8], index: &mut usize) -> Result<OscMessage, ParserError> {
 
     return match (address, value) {
         (Ok(address), Ok(value)) => {
-            let value = ManuallyDrop::new(value);
             Ok(OscMessage {
                 address: CString::new(address).unwrap().into_raw(),
-                value_length: value.len() as u32,
-                value: value.as_slice().as_ptr(),
+                value_length: value.len() as i32,
+                value: Box::into_raw(value.into_boxed_slice()) as *const OscValue,
             })
         }
         (Err(e), _) => {
@@ -224,8 +222,10 @@ pub unsafe extern "C" fn free_osc_message(ptr: *const OscMessage) {
 
     let message = Box::from_raw(ptr as *mut OscMessage);
     let address = CString::from_raw(message.address as *mut c_char);
+    let values = Box::from_raw(message.value as *mut OscValue);
     // Should defo be freeing strings from the values array here too, but oh well. VRChat doesn't send em anyways
     drop(address);
+    drop(values);
     drop(message);
 }
 
@@ -298,7 +298,7 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
 
 // Creates a bundle from an array of OscMessages
 #[no_mangle]
-pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessage, len: u32, messages_index: &mut u32) -> usize {
+pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessage, len: i32, messages_index: &mut i32) -> i32 {
     // OSC bundles start with the 16 byte header consisting of "#bundle" (with null terminator) followed by a 64-bit big-endian timetag
     let buf = unsafe { slice::from_raw_parts_mut(buf, 4096) };
     let messages = unsafe { slice::from_raw_parts(messages, len as usize) };
@@ -330,12 +330,12 @@ pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessa
         let length = address.len() + 1;
         let padded_length = if length % 4 == 0 { length } else { length + 4 - (length % 4) };
         if ix + padded_length + 4 > 4096 {
-            return ix;
+            return ix as i32;
         }
 
         let length = create_osc_message(unsafe { buf.as_mut_ptr().add(ix + 4) }, msg);
         // Write the length of the message to the buffer. Ensure we use 4 bytes
-        let bytes: [u8; 4] = (length as u32).to_be_bytes();
+        let bytes: [u8; 4] = (length as i32).to_be_bytes();
 
         buf[ix..ix + 4].copy_from_slice(&bytes);
         ix += length + 4;
@@ -344,7 +344,7 @@ pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessa
         *messages_index += 1;
     }
 
-    ix
+    ix as i32
 }
 
 #[cfg(test)]
@@ -434,7 +434,7 @@ mod tests {
                 value: vec![value3].into_boxed_slice().as_ptr(),
             };
             let pp = [osc_message1, osc_message2];
-            let mut index: u32 = 0;
+            let mut index: i32 = 0;
             let ret_size = create_osc_bundle(buf.as_mut_ptr(), pp.as_ptr(), 2, &mut index);
             assert_ne!(ret_size, 0)
         }
