@@ -362,7 +362,7 @@ mod tests {
             let osc_message = OscMessage {
                 address: CString::new("/test_message/meme").unwrap().into_raw(),
                 value_length: 1,
-                value: vec!(value).into_boxed_slice().as_ptr()
+                value: Box::into_raw(vec!(value).into_boxed_slice()) as *const OscValue
             };
 
             let index = create_osc_message(buf.as_mut_ptr(), &osc_message);
@@ -392,7 +392,7 @@ mod tests {
             let osc_message = OscMessage {
                 address: CString::new("/test_message/meme").unwrap().into_raw(),
                 value_length: 3,
-                value: vec![value1, value2, value3].into_boxed_slice().as_ptr(),
+                value: Box::into_raw(vec![value1, value2, value3].into_boxed_slice()) as *const OscValue,
             };
 
             let index = create_osc_message(buf.as_mut_ptr(), &osc_message);
