@@ -329,7 +329,7 @@ pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessa
         let address = unsafe { CStr::from_ptr(msg.address).to_str() }.unwrap();
         let length = address.len() + 1;
         let padded_length = if length % 4 == 0 { length } else { length + 4 - (length % 4) };
-        if ix + padded_length + 4 > 4096 {
+        if ix + padded_length + 4 >= 4096 {
             return ix as i32;
         }
 
