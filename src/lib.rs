@@ -321,24 +321,27 @@ pub extern "C" fn create_osc_bundle(buf: *mut c_uchar, messages: *const OscMessa
     ix += 8;
 
     // Now we need to write the messages
+    let mut temp_buffer: [c_uchar; 4096] = [0; 4096];
     for msg in messages.iter().skip(*messages_index as usize) {
         // We need to calculate the length of the string and pad it to a multiple of 4 to ensure alignment
         // then add another 4 bytes for the length of the message
         // If adding it would go over the buffer size, return
         // Use the existing function to write the message to the buffer
-        let address = unsafe { CStr::from_ptr(msg.address).to_str() }.unwrap();
-        let length = address.len() + 1;
-        let padded_length = if length % 4 == 0 { length } else { length + 4 - (length % 4) };
-        if ix + padded_length + 4 >= 4096 {
-            return ix as i32;
+
+        //let length = create_osc_message(unsafe { buf.as_mut_ptr().add(ix + 4) }, msg);
+        let length = create_osc_message(temp_buffer.as_mut_ptr(), msg);
+        if length + ix >= 4096 {
+            break;
         }
 
-        let length = create_osc_message(unsafe { buf.as_mut_ptr().add(ix + 4) }, msg);
         // Write the length of the message to the buffer. Ensure we use 4 bytes
         let bytes: [u8; 4] = (length as i32).to_be_bytes();
 
         buf[ix..ix + 4].copy_from_slice(&bytes);
-        ix += length + 4;
+        ix += 4;
+
+        buf[ix..ix + length].copy_from_slice(&temp_buffer[0..length]);
+        ix += length;
 
         // Update the message index after each iteration
         *messages_index += 1;
