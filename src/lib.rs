@@ -1,7 +1,8 @@
 use std::ffi::{c_char, c_uchar, CStr, CString};
 use std::ptr::null;
-use std::{slice};
+use std::slice;
 use std::time::{SystemTime, UNIX_EPOCH};
+
 
 macro_rules! println {
     ($($arg:tt)*) => ({
@@ -169,7 +170,9 @@ fn parse(buf: &[u8], index: &mut usize) -> Result<OscMessage, ParserError> {
         return Err(ParserError::InvalidFormat);
     }
 
-    let address = extract_osc_address(&buf, index);
+    let Ok(address) = extract_osc_address(&buf, index) else {
+        return Err(ParserError::InvalidAddress);
+    };
     println!("Address: {:?}", address);
 
     // Ensure we still have data
@@ -177,24 +180,21 @@ fn parse(buf: &[u8], index: &mut usize) -> Result<OscMessage, ParserError> {
         return Err(ParserError::InvalidFormat);
     }
 
-    let value = extract_osc_values(&buf, index);
+    let Ok(value) = extract_osc_values(&buf, index) else {
+        return Err(ParserError::InvalidValue);
+    };
     println!("Value: {:?}", value);
 
-    return match (address, value) {
-        (Ok(address), Ok(value)) => {
-            Ok(OscMessage {
-                address: CString::new(address).unwrap().into_raw(),
-                value_length: value.len() as i32,
-                value: Box::into_raw(value.into_boxed_slice()) as *const OscValue,
-            })
-        }
-        (Err(e), _) => {
-            Err(e)
-        }
-        (_, Err(e)) => {
-            Err(e)
-        }
-    };
+    if value.is_empty() {
+        return Err(ParserError::InvalidValue);
+    }
+
+    Ok(OscMessage {
+        address: CString::new(address).unwrap().into_raw(),
+        value_length: value.len() as i32,
+        value: Box::into_raw(value.into_boxed_slice()) as *const OscValue,
+    })
+
 }
 
 // Import a byte array from C# and parse it
