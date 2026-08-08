@@ -21,7 +21,7 @@ pub enum ParserError {
 
 impl Default for OscValue {
     fn default() -> OscValue {
-        OscValue { osc_type: OscType::Null, int: 0, float: 0.0, bool: false, string: std::ptr::null() }
+        OscValue { osc_type: OscType::Null, int: 0, float: 0.0, bool: false, string: std::ptr::null(), blob: std::ptr::null(), blob_len: 0 }
     }
 }
 
@@ -33,6 +33,7 @@ pub enum OscType {
     Float,
     Bool,
     String,
+    Blob,
     ArrayBegin,
     ArrayEnd
 }
@@ -45,6 +46,8 @@ pub struct OscValue {
     float: f32,
     bool: bool,
     string: *const c_char,
+    blob: *const c_uchar,
+    blob_len: i32,
 }
 
 #[repr(C)]
@@ -142,6 +145,19 @@ fn extract_osc_values(buf: &[u8], ix: &mut usize) -> Result<Vec<OscValue>, Parse
                 value.osc_type = OscType::String;
 
             }
+            'b' => {
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&buf[*ix..*ix + 4]);
+                let blob_len = i32::from_be_bytes(bytes) as usize;
+                *ix += 4;
+
+                let blob_data: Box<[u8]> = buf[*ix..*ix + blob_len].to_vec().into_boxed_slice();
+                *ix += blob_len;
+
+                value.blob_len = blob_len as i32;
+                value.blob = Box::into_raw(blob_data) as *const c_uchar;
+                value.osc_type = OscType::Blob;
+            }
             '[' => {
                 value.osc_type = OscType::ArrayBegin;
             }
@@ -222,6 +238,12 @@ pub unsafe extern "C" fn free_osc_message(ptr: *const OscMessage) {
 
     let message = Box::from_raw(ptr as *mut OscMessage);
     let address = CString::from_raw(message.address as *mut c_char);
+    let values_slice = slice::from_raw_parts(message.value, message.value_length as usize);
+    for v in values_slice {
+        if v.osc_type == OscType::Blob && !v.blob.is_null() {
+            drop(Box::from_raw(slice::from_raw_parts_mut(v.blob as *mut c_uchar, v.blob_len as usize)));
+        }
+    }
     let values = Box::from_raw(message.value as *mut OscValue);
     // Should defo be freeing strings from the values array here too, but oh well. VRChat doesn't send em anyways
     drop(address);
@@ -258,6 +280,7 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
             OscType::Int => 'i', // i
             OscType::Float =>  'f', // f
             OscType::Bool => {if value.bool { 'T' } else { 'F' }}, // T or F
+            OscType::Blob => 'b',
             OscType::ArrayBegin => '[',
             OscType::ArrayEnd => ']',
             _ => '\0',
@@ -288,6 +311,22 @@ pub extern "C" fn create_osc_message(buf: *mut c_uchar, osc_template: &OscMessag
                 let bytes = value.float.to_be_bytes();
                 buf[ix..ix + 4].copy_from_slice(&bytes);
                 ix += 4;
+            }
+            OscType::Blob => {
+                let blob_len = value.blob_len as usize;
+                let len_bytes = value.blob_len.to_be_bytes();
+                buf[ix..ix + 4].copy_from_slice(&len_bytes);
+                ix += 4;
+
+                let blob = unsafe { slice::from_raw_parts(value.blob, blob_len) };
+                buf[ix..ix + blob_len].copy_from_slice(blob);
+                ix += blob_len;
+
+                if ix % 4 != 0 {
+                    let pad = 4 - (ix % 4);
+                    buf[ix..ix + pad].copy_from_slice(&[0, 0, 0][..pad]);
+                    ix += pad;
+                }
             }
             _ => {}
         }
@@ -415,6 +454,37 @@ mod tests {
                     assert_eq!(value[1].int, 69, "Value was resolved incorrectly.");
                     assert_eq!(value[2].osc_type, OscType::Float, "Value was resolved incorrectly.");
                     assert_eq!(value[2].float, 69.42, "Value was resolved incorrectly.");
+                }
+                Err(_) => assert!(false, "Failed to parse message."),
+            }
+        }
+
+        #[test]
+        fn serialize_osc_blob() {
+            let mut buf: [u8; 4096] = [0; 4096];
+            let blob_bytes: Box<[u8]> = vec![1u8, 2, 3, 4, 5].into_boxed_slice();
+            let value = OscValue {
+                osc_type: OscType::Blob,
+                blob: blob_bytes.as_ptr(),
+                blob_len: blob_bytes.len() as i32,
+                ..Default::default()
+            };
+            let osc_message = OscMessage {
+                address: CString::new("/test_message/blob").unwrap().into_raw(),
+                value_length: 1,
+                value: Box::into_raw(vec!(value).into_boxed_slice()) as *const OscValue
+            };
+
+            let index = create_osc_message(buf.as_mut_ptr(), &osc_message);
+            let mut parse_index = 0;
+            match parse(&buf, &mut parse_index) {
+                Ok(message) => {
+                    assert_eq!(parse_index, index, "Incorrect parse index returned.");
+                    let values = unsafe { slice::from_raw_parts(message.value, message.value_length as usize) };
+                    assert_eq!(values[0].osc_type, OscType::Blob, "Value was resolved incorrectly.");
+                    assert_eq!(values[0].blob_len, 5, "Blob length was resolved incorrectly.");
+                    let blob = unsafe { slice::from_raw_parts(values[0].blob, values[0].blob_len as usize) };
+                    assert_eq!(blob, &[1, 2, 3, 4, 5], "Blob contents were resolved incorrectly.");
                 }
                 Err(_) => assert!(false, "Failed to parse message."),
             }
