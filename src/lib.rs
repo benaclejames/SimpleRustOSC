@@ -135,11 +135,18 @@ fn extract_osc_values(buf: &[u8], ix: &mut usize) -> Result<Vec<OscValue>, Parse
                 value.osc_type = OscType::Bool;
             }
             's' => {
-                let mut string = String::new();
-                while buf[*ix] != 0 {
-                    string.push(buf[*ix] as char);
+                // Find how long the str is
+                let start_ix = *ix;
+                while *ix < buf.len() && buf[*ix] != 0 {
                     *ix += 1;
                 }
+
+                // Ensure str finishes
+                if *ix >= buf.len() {
+                    return Err(ParserError::InvalidValue);
+                }
+
+                let string = String::from_utf8_lossy(&buf[start_ix..*ix]).into_owned();
                 *ix += 1;
                 value.string = CString::new(string).unwrap().into_raw();
                 value.osc_type = OscType::String;
