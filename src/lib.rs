@@ -176,6 +176,7 @@ fn extract_osc_values(buf: &[u8], ix: &mut usize) -> Result<Vec<OscValue>, Parse
             }
         }
 
+        // Ensure we're quantized
         if *ix % 4 != 0 {
             *ix += 4 - (*ix % 4);
         }
